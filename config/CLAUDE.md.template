@@ -1,0 +1,4 @@
+- Always reply in Chinese.
+- Always use Context7 MCP when I need library/API documentation, code generation, setup or configuration steps without me having to explicitly ask.
+- If there is something you do not understand or is ambiguous, seek confirmation or clarification from the user before making changes based on assumptions.
+- Only write high-value comments if at all. Avoid talking to the user through comments.
