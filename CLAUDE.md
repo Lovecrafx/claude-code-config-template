@@ -42,12 +42,13 @@
 - `cachedStatsigGates` / `cachedDynamicConfigs` / `cachedGrowthBookFeatures` - 缓存数据
 - `githubRepoPaths` - 用户特定的仓库路径
 
-### 敏感信息脱敏规则
+### settings.json 脱敏规则
 
-| 字段 | 脱敏后值 |
+| 字段 | 处理方式 |
 |------|---------|
-| `env.ANTHROPIC_AUTH_TOKEN` | `"YOUR_API_KEY_HERE"` |
-| `env.ANTHROPIC_BASE_URL` (非官方) | `"YOUR_CUSTOM_ENDPOINT"` |
+| `env.ANTHROPIC_AUTH_TOKEN` | 替换为 `"YOUR_API_KEY_HERE"` |
+| `env.ANTHROPIC_BASE_URL` (非官方) | 替换为 `"YOUR_CUSTOM_ENDPOINT"` |
+| `hooks` | 完全移除（用户特定配置） |
 
 ## 工作流程
 
@@ -110,4 +111,4 @@ config/.claude.json
 1. **验证脱敏结果** - 同步后检查模板文件，确保 API 密钥已替换为占位符
 2. **JSON 格式验证** - 脚本会自动验证，确保 JSON 格式正确
 3. **备份机制** - 每次同步会自动备份旧模板到 `.template_backup/`
-4. **跨平台差异** - macOS 特定的音效配置（afplay）在非 macOS 系统上会被 install.sh 自动移除
+4. **跨平台差异** - 保持配置的通用性和安全性

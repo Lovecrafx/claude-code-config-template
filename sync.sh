@@ -103,6 +103,12 @@ sanitize_json() {
                 end
             else
                 .
+            end |
+            # 移除 hooks 配置（用户特定）
+            if .hooks then
+                del(.hooks)
+            else
+                .
             end
         ' "$input_file" > "$output_file"
     else
