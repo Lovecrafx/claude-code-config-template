@@ -60,3 +60,6 @@ vendor/
 # 缓存目录
 .cache/
 .parcel-cache/
+
+# Claude 本地配置
+.claude/
