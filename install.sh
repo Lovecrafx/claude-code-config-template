@@ -29,6 +29,85 @@ detect_os() {
     fi
 }
 
+# 检测并安装 Claude Code
+check_claude_code() {
+    echo "检查 Claude Code 安装..."
+
+    if ! command -v claude &> /dev/null; then
+        echo -e "${YELLOW}未检测到 Claude Code CLI${NC}"
+
+        # 备份用户现有的 .claude.json（官方安装脚本会重置此文件）
+        local claude_json_backup="$HOME/.claude.json.install-backup"
+        if [ -f "$HOME/.claude.json" ]; then
+            cp "$HOME/.claude.json" "$claude_json_backup"
+            echo -e "${YELLOW}已备份现有 .claude.json${NC}"
+        fi
+
+        # 确保 curl 已安装
+        if ! command -v curl &> /dev/null; then
+            echo "正在安装 curl..."
+            if [ "$OS" = "macos" ]; then
+                if command -v brew &> /dev/null; then
+                    brew install curl
+                else
+                    echo -e "${RED}未检测到 Homebrew，请先安装: https://brew.sh${NC}"
+                    exit 1
+                fi
+            else
+                if command -v apt-get &> /dev/null; then
+                    apt-get update -qq && apt-get install -y curl
+                elif command -v yum &> /dev/null; then
+                    yum install -y curl
+                else
+                    echo -e "${RED}无法自动安装 curl，请手动安装${NC}"
+                    exit 1
+                fi
+            fi
+        fi
+
+        echo "正在自动安装 Claude Code..."
+        echo ""
+
+        if curl -fsSL https://claude.ai/install.sh | bash; then
+            echo ""
+            # 恢复用户原有的 .claude.json 配置
+            if [ -f "$claude_json_backup" ]; then
+                # 合并原配置和新安装的配置
+                if command -v jq &> /dev/null; then
+                    # 将官方安装脚本生成的配置与用户原有配置合并
+                    # 用户配置优先，保留官方脚本新增的字段
+                    jq -s '.[1] as $official | .[0] + $official | with_entries(.value = ($official[.key] // .value))' \
+                        "$claude_json_backup" "$HOME/.claude.json" > "$HOME/.claude.json.tmp" 2>/dev/null || \
+                        jq -s '.[0] * .[1]' "$claude_json_backup" "$HOME/.claude.json" > "$HOME/.claude.json.tmp"
+                    mv "$HOME/.claude.json.tmp" "$HOME/.claude.json"
+                    rm -f "$claude_json_backup"
+                    echo -e "${GREEN}✓ 已恢复原有配置${NC}"
+                else
+                    # jq 不可用时，直接恢复原配置
+                    mv "$claude_json_backup" "$HOME/.claude.json"
+                    echo -e "${YELLOW}⚠ 已恢复原有配置（建议安装 jq 以获得更好的合并效果）${NC}"
+                fi
+            fi
+
+            if command -v claude &> /dev/null; then
+                echo -e "${GREEN}✓ Claude Code 安装成功${NC}"
+            else
+                echo -e "${YELLOW}⚠ 安装脚本已执行，请重新打开终端后再运行此脚本${NC}"
+                exit 0
+            fi
+        else
+            # 安装失败时清理备份
+            rm -f "$claude_json_backup"
+            echo -e "${RED}✗ Claude Code 安装失败${NC}"
+            echo "请手动安装后重试: curl -fsSL https://claude.ai/install.sh | bash"
+            exit 1
+        fi
+    else
+        echo -e "${GREEN}✓ Claude Code 已安装${NC}"
+    fi
+    echo ""
+}
+
 # 备份现有配置
 backup_existing_config() {
     if [ -d "$CLAUDE_DIR" ]; then
@@ -209,6 +288,7 @@ show_summary() {
 # 主流程
 main() {
     detect_os
+    check_claude_code
     backup_existing_config
     create_directories
     install_configs
