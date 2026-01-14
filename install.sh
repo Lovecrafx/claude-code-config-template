@@ -1,16 +1,9 @@
 #!/bin/bash
 set -e
 
-# 颜色输出
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
-
-# 配置变量
-CLAUDE_DIR="$HOME/.claude"
-BACKUP_DIR="$HOME/.claude.backup"
+# 引入公共库
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/scripts/common.sh"
 
 echo -e "${GREEN}Claude Code 配置安装脚本${NC}"
 echo "======================================"
@@ -36,14 +29,12 @@ check_claude_code() {
     if ! command -v claude &> /dev/null; then
         echo -e "${YELLOW}未检测到 Claude Code CLI${NC}"
 
-        # 备份用户现有的 .claude.json（官方安装脚本会重置此文件）
         local claude_json_backup="$HOME/.claude.json.install-backup"
         if [ -f "$HOME/.claude.json" ]; then
             cp "$HOME/.claude.json" "$claude_json_backup"
             echo -e "${YELLOW}已备份现有 .claude.json${NC}"
         fi
 
-        # 确保 curl 已安装
         if ! command -v curl &> /dev/null; then
             echo "正在安装 curl..."
             if [ "$OS" = "macos" ]; then
@@ -70,26 +61,18 @@ check_claude_code() {
 
         if curl -fsSL https://claude.ai/install.sh | bash; then
             echo ""
-            # 恢复用户原有的 .claude.json 配置
             if [ -f "$claude_json_backup" ]; then
-                # 合并原配置和新安装的配置
-                if command -v jq &> /dev/null; then
-                    # 将官方安装脚本生成的配置与用户原有配置合并
-                    # 用户配置优先，保留官方脚本新增的字段
-                    jq -s '.[1] as $official | .[0] + $official | with_entries(.value = ($official[.key] // .value))' \
-                        "$claude_json_backup" "$HOME/.claude.json" > "$HOME/.claude.json.tmp" 2>/dev/null || \
-                        jq -s '.[0] * .[1]' "$claude_json_backup" "$HOME/.claude.json" > "$HOME/.claude.json.tmp"
+                if has_jq; then
+                    merge_configs "$claude_json_backup" "$HOME/.claude.json" "$HOME/.claude.json.tmp"
                     mv "$HOME/.claude.json.tmp" "$HOME/.claude.json"
                     rm -f "$claude_json_backup"
                     echo -e "${GREEN}✓ 已恢复原有配置${NC}"
                 else
-                    # jq 不可用时，直接恢复原配置
                     mv "$claude_json_backup" "$HOME/.claude.json"
                     echo -e "${YELLOW}⚠ 已恢复原有配置（建议安装 jq 以获得更好的合并效果）${NC}"
                 fi
             fi
 
-            # 添加临时 PATH 以便检测新安装的 claude 命令
             export PATH="$HOME/.local/bin:$PATH"
 
             if command -v claude &> /dev/null; then
@@ -99,7 +82,6 @@ check_claude_code() {
                 echo -e "${YELLOW}⚠ 继续执行配置安装流程...${NC}"
             fi
         else
-            # 安装失败时清理备份
             rm -f "$claude_json_backup"
             echo -e "${RED}✗ Claude Code 安装失败${NC}"
             echo "请手动安装后重试: curl -fsSL https://claude.ai/install.sh | bash"
@@ -113,34 +95,17 @@ check_claude_code() {
 
 # 备份现有配置
 backup_existing_config() {
-    if [ -d "$CLAUDE_DIR" ]; then
-        echo -e "${YELLOW}正在备份现有配置到 $BACKUP_DIR${NC}"
-
-        # 删除旧备份
-        if [ -d "$BACKUP_DIR" ]; then
-            rm -rf "$BACKUP_DIR"
-        fi
-
-        # 创建新备份
-        cp -r "$CLAUDE_DIR" "$BACKUP_DIR"
-        echo -e "${GREEN}✓ 备份完成${NC}"
-    else
-        echo -e "${YELLOW}未找到现有配置，跳过备份${NC}"
-    fi
+    create_backup "$CLAUDE_DIR" "$BACKUP_DIR" "现有配置"
 }
 
 # 处理模板文件 - 交互式输入敏感信息
 process_template() {
     local template_file="$1"
     local output_file="$2"
-
-    # 读取模板文件内容
     local content
     content=$(cat "$template_file")
 
-    # 替换 YOUR_API_KEY_HERE
-    if [[ "$content" == *"YOUR_API_KEY_HERE"* ]]; then
-        # 优先使用环境变量，否则交互式输入
+    if [[ "$content" == *"$PLACEHOLDER_API_KEY"* ]]; then
         if [ -n "$ANTHROPIC_API_KEY" ]; then
             API_KEY="$ANTHROPIC_API_KEY"
         elif [ -n "$ANTHROPIC_AUTH_TOKEN" ]; then
@@ -150,39 +115,33 @@ process_template() {
             read -s API_KEY
             echo
         fi
-        content="${content//YOUR_API_KEY_HERE/$API_KEY}"
+        content="${content//$PLACEHOLDER_API_KEY/$API_KEY}"
     fi
 
-    # 替换 YOUR_CUSTOM_ENDPOINT
-    if [[ "$content" == *"YOUR_CUSTOM_ENDPOINT"* ]]; then
-        # 优先使用环境变量，否则交互式输入
+    if [[ "$content" == *"$PLACEHOLDER_ENDPOINT"* ]]; then
         CUSTOM_ENDPOINT=""
-        # 非交互式环境（Docker 测试）自动使用默认
         if [ ! -t 0 ]; then
-            # 非交互式，直接删除该行使用默认
-            content=$(echo "$content" | sed '/YOUR_CUSTOM_ENDPOINT/d')
+            content=$(echo "$content" | sed "/$PLACEHOLDER_ENDPOINT/d")
         elif [ -n "$ANTHROPIC_BASE_URL" ]; then
             CUSTOM_ENDPOINT="$ANTHROPIC_BASE_URL"
-            content="${content//YOUR_CUSTOM_ENDPOINT/$CUSTOM_ENDPOINT}"
+            content="${content//$PLACEHOLDER_ENDPOINT/$CUSTOM_ENDPOINT}"
         else
             echo -n "请输入您的自定义 API endpoint (留空使用默认): "
             read -r CUSTOM_ENDPOINT
             if [ -n "$CUSTOM_ENDPOINT" ]; then
-                content="${content//YOUR_CUSTOM_ENDPOINT/$CUSTOM_ENDPOINT}"
+                content="${content//$PLACEHOLDER_ENDPOINT/$CUSTOM_ENDPOINT}"
             else
-                # 移除包含 YOUR_CUSTOM_ENDPOINT 的行，使用默认值
-                content=$(echo "$content" | sed '/YOUR_CUSTOM_ENDPOINT/d')
+                content=$(echo "$content" | sed "/$PLACEHOLDER_ENDPOINT/d")
             fi
         fi
     fi
 
-    # 写入输出文件
     echo "$content" > "$output_file"
 }
 
-# 处理 hooks 配置（根据操作系统调整）
+# 处理 hooks 配置（预留用于未来扩展）
 process_hooks_config() {
-    # macOS 特定配置已在模板中移除，此函数保留用于未来扩展
+    # 未来可能需要根据操作系统调整 hooks 配置
     :
 }
 
@@ -197,91 +156,64 @@ create_directories() {
 install_configs() {
     echo "安装配置文件..."
 
-    # 处理 settings.json
-    if [ -f "$SCRIPT_DIR/config/settings.json.template" ]; then
-        process_template "$SCRIPT_DIR/config/settings.json.template" "$CLAUDE_DIR/settings.json"
+    if [ -f "$SETTINGS_TEMPLATE" ]; then
+        process_template "$SETTINGS_TEMPLATE" "$CLAUDE_DIR/settings.json"
         process_hooks_config "$CLAUDE_DIR/settings.json"
         echo -e "${GREEN}✓ settings.json 安装完成${NC}"
     fi
 
-    # 处理 config.json
-    if [ -f "$SCRIPT_DIR/config/config.json.template" ]; then
-        cp "$SCRIPT_DIR/config/config.json.template" "$CLAUDE_DIR/config.json"
+    if [ -f "$CONFIG_TEMPLATE" ]; then
+        cp "$CONFIG_TEMPLATE" "$CLAUDE_DIR/config.json"
         echo -e "${GREEN}✓ config.json 安装完成${NC}"
     fi
 
-    # 处理 .claude.json（追加模式，保留现有配置）
-    if [ -f "$SCRIPT_DIR/config/.claude.json.template" ]; then
+    if [ -f "$CLAUDE_JSON_TEMPLATE" ]; then
         if [ -f "$HOME/.claude.json" ]; then
             echo -e "${YELLOW}合并 .claude.json 配置...${NC}"
-            # 如果 jq 可用，合并配置
-            if command -v jq &> /dev/null; then
-                jq -s '.[0] * .[1]' "$HOME/.claude.json" "$SCRIPT_DIR/config/.claude.json.template" > "$HOME/.claude.json.tmp"
+            if has_jq; then
+                merge_configs "$HOME/.claude.json" "$CLAUDE_JSON_TEMPLATE" "$HOME/.claude.json.tmp"
                 mv "$HOME/.claude.json.tmp" "$HOME/.claude.json"
             else
-                # 否则直接追加（可能会产生无效 JSON，仅作为后备）
-                cp "$SCRIPT_DIR/config/.claude.json.template" "$HOME/.claude.json"
+                cp "$CLAUDE_JSON_TEMPLATE" "$HOME/.claude.json"
             fi
         else
-            cp "$SCRIPT_DIR/config/.claude.json.template" "$HOME/.claude.json"
+            cp "$CLAUDE_JSON_TEMPLATE" "$HOME/.claude.json"
         fi
         echo -e "${GREEN}✓ .claude.json 更新完成${NC}"
     fi
 
-    # 复制 CLAUDE.md
-    if [ -f "$SCRIPT_DIR/config/CLAUDE.md.template" ]; then
-        cp "$SCRIPT_DIR/config/CLAUDE.md.template" "$CLAUDE_DIR/CLAUDE.md"
+    if [ -f "$CLAUDE_MD_TEMPLATE" ]; then
+        cp "$CLAUDE_MD_TEMPLATE" "$CLAUDE_DIR/CLAUDE.md"
         echo -e "${GREEN}✓ CLAUDE.md 安装完成${NC}"
     fi
 }
 
-# 复制自定义扩展
+# 安装自定义扩展
 install_extensions() {
     echo "安装自定义扩展..."
 
-    # 复制 commands
-    if [ -d "$SCRIPT_DIR/commands" ] && [ -n "$(ls -A $SCRIPT_DIR/commands 2>/dev/null)" ]; then
-        cp -r "$SCRIPT_DIR/commands"/* "$CLAUDE_DIR/commands/"
-        echo -e "${GREEN}✓ commands 安装完成${NC}"
-    fi
-
-    # 复制 agents
-    if [ -d "$SCRIPT_DIR/agents" ] && [ -n "$(ls -A $SCRIPT_DIR/agents 2>/dev/null)" ]; then
-        cp -r "$SCRIPT_DIR/agents"/* "$CLAUDE_DIR/agents/"
-        echo -e "${GREEN}✓ agents 安装完成${NC}"
-    fi
-
-    # 复制 skills
-    if [ -d "$SCRIPT_DIR/skills" ] && [ -n "$(ls -A $SCRIPT_DIR/skills 2>/dev/null)" ]; then
-        cp -r "$SCRIPT_DIR/skills"/* "$CLAUDE_DIR/skills/" 2>/dev/null || true
-        echo -e "${GREEN}✓ skills 安装完成${NC}"
-    fi
+    for ext in "${EXTENSIONS[@]}"; do
+        local source_dir="$PROJECT_ROOT/$ext"
+        if [ -d "$source_dir" ] && [ -n "$(ls -A $source_dir 2>/dev/null)" ]; then
+            cp -r "$source_dir"/* "$CLAUDE_DIR/$ext/"
+            echo -e "${GREEN}✓ ${ext} 安装完成${NC}"
+        fi
+    done
 }
 
 # 验证 JSON 格式
 validate_json() {
-    echo "验证 JSON 格式..."
-
-    if command -v jq &> /dev/null; then
-        for json_file in "$CLAUDE_DIR/settings.json" "$CLAUDE_DIR/config.json" "$HOME/.claude.json"; do
-            if [ -f "$json_file" ]; then
-                if jq empty "$json_file" 2>/dev/null; then
-                    echo -e "${GREEN}✓ $(basename $json_file) 格式正确${NC}"
-                else
-                    echo -e "${RED}✗ $(basename $json_file) 格式错误${NC}"
-                fi
-            fi
-        done
-    else
-        echo -e "${YELLOW}未安装 jq，跳过 JSON 验证${NC}"
-    fi
+    validate_json_files \
+        "$CLAUDE_DIR/settings.json" \
+        "$CLAUDE_DIR/config.json" \
+        "$HOME/.claude.json"
 }
 
 # 显示安装摘要
-show_summary() {
+print_install_summary() {
     echo ""
     echo "======================================"
-    echo -e "${GREEN}安装完成！${NC}"
+    echo -e "${GREEN}✓ 安装完成！${NC}"
     echo ""
     echo "配置位置: $CLAUDE_DIR"
     echo "备份位置: $BACKUP_DIR"
@@ -302,8 +234,9 @@ main() {
     install_configs
     install_extensions
     validate_json
-    show_summary
+    print_install_summary
 }
 
 # 执行主流程
 main
+
