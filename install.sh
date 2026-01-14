@@ -89,11 +89,14 @@ check_claude_code() {
                 fi
             fi
 
+            # 添加临时 PATH 以便检测新安装的 claude 命令
+            export PATH="$HOME/.local/bin:$PATH"
+
             if command -v claude &> /dev/null; then
                 echo -e "${GREEN}✓ Claude Code 安装成功${NC}"
             else
-                echo -e "${YELLOW}⚠ 安装脚本已执行，请重新打开终端后再运行此脚本${NC}"
-                exit 0
+                echo -e "${YELLOW}⚠ Claude Code 安装完成，但当前会话中无法检测到命令${NC}"
+                echo -e "${YELLOW}⚠ 继续执行配置安装流程...${NC}"
             fi
         else
             # 安装失败时清理备份
@@ -137,21 +140,39 @@ process_template() {
 
     # 替换 YOUR_API_KEY_HERE
     if [[ "$content" == *"YOUR_API_KEY_HERE"* ]]; then
-        echo -n "请输入您的 ANTHROPIC_API_KEY: "
-        read -s API_KEY
-        echo
+        # 优先使用环境变量，否则交互式输入
+        if [ -n "$ANTHROPIC_API_KEY" ]; then
+            API_KEY="$ANTHROPIC_API_KEY"
+        elif [ -n "$ANTHROPIC_AUTH_TOKEN" ]; then
+            API_KEY="$ANTHROPIC_AUTH_TOKEN"
+        else
+            echo -n "请输入您的 ANTHROPIC_API_KEY: "
+            read -s API_KEY
+            echo
+        fi
         content="${content//YOUR_API_KEY_HERE/$API_KEY}"
     fi
 
     # 替换 YOUR_CUSTOM_ENDPOINT
     if [[ "$content" == *"YOUR_CUSTOM_ENDPOINT"* ]]; then
-        echo -n "请输入您的自定义 API endpoint (留空使用默认): "
-        read -r CUSTOM_ENDPOINT
-        if [ -n "$CUSTOM_ENDPOINT" ]; then
+        # 优先使用环境变量，否则交互式输入
+        CUSTOM_ENDPOINT=""
+        # 非交互式环境（Docker 测试）自动使用默认
+        if [ ! -t 0 ]; then
+            # 非交互式，直接删除该行使用默认
+            content=$(echo "$content" | sed '/YOUR_CUSTOM_ENDPOINT/d')
+        elif [ -n "$ANTHROPIC_BASE_URL" ]; then
+            CUSTOM_ENDPOINT="$ANTHROPIC_BASE_URL"
             content="${content//YOUR_CUSTOM_ENDPOINT/$CUSTOM_ENDPOINT}"
         else
-            # 移除包含 YOUR_CUSTOM_ENDPOINT 的行，使用默认值
-            content=$(echo "$content" | sed '/YOUR_CUSTOM_ENDPOINT/d')
+            echo -n "请输入您的自定义 API endpoint (留空使用默认): "
+            read -r CUSTOM_ENDPOINT
+            if [ -n "$CUSTOM_ENDPOINT" ]; then
+                content="${content//YOUR_CUSTOM_ENDPOINT/$CUSTOM_ENDPOINT}"
+            else
+                # 移除包含 YOUR_CUSTOM_ENDPOINT 的行，使用默认值
+                content=$(echo "$content" | sed '/YOUR_CUSTOM_ENDPOINT/d')
+            fi
         fi
     fi
 
@@ -161,21 +182,8 @@ process_template() {
 
 # 处理 hooks 配置（根据操作系统调整）
 process_hooks_config() {
-    local settings_file="$1"
-    local content
-
-    content=$(cat "$settings_file")
-
-    # 如果不是 macOS，移除 afplay 相关的 hooks
-    if [ "$OS" != "macos" ]; then
-        echo -e "${YELLOW}检测到非 macOS 系统，移除 macOS 特定的通知音效配置${NC}"
-        # 使用 jq 移除 hooks（如果安装了 jq）
-        if command -v jq &> /dev/null; then
-            content=$(echo "$content" | jq 'del(.hooks)')
-        fi
-    fi
-
-    echo "$content" > "$settings_file"
+    # macOS 特定配置已在模板中移除，此函数保留用于未来扩展
+    :
 }
 
 # 创建必要的目录结构
