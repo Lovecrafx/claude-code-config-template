@@ -5,9 +5,20 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/scripts/common.sh"
 
+# 解析命令行参数
+DRY_RUN=false
+for arg in "$@"; do
+    case "$arg" in
+        --dry-run)
+            DRY_RUN=true
+            ;;
+    esac
+done
+
 # 统计变量
 SYNCED_CONFIGS=0
 SYNCED_EXTENSIONS=0
+DELETED_TEMPLATES=0
 
 # ============================================================================
 # 主流程函数
@@ -70,41 +81,101 @@ backup_templates() {
     echo ""
 }
 
+# 检测需要删除的扩展文件
+detect_extension_deletions() {
+    local ext_type="$1"
+    local source_dir="$CLAUDE_DIR/$ext_type"
+    local target_dir="$PROJECT_ROOT/$ext_type"
+
+    [ ! -d "$target_dir" ] && return 0
+
+    for template_file in "$target_dir"/*.md; do
+        [ -f "$template_file" ] || continue
+
+        local basename
+        basename=$(basename "$template_file")
+        [[ "$basename" == ".gitkeep" ]] && continue
+
+        local source_file="$source_dir/$basename"
+        [ ! -f "$source_file" ] && echo "$template_file"
+    done
+}
+
+# 执行删除同步
+sync_deletions() {
+    echo -e "${BLUE}检查需要删除的模板文件...${NC}"
+
+    local all_deletions=()
+
+    # 收集扩展文件删除（只保留 commands/agents/skills）
+    for ext in "${EXTENSIONS[@]}"; do
+        while IFS= read -r file; do
+            [ -n "$file" ] && all_deletions+=("$file")
+        done < <(detect_extension_deletions "$ext")
+    done
+
+    # 无需删除
+    if [ ${#all_deletions[@]} -eq 0 ]; then
+        echo -e "  ${GREEN}✓${NC} 无需删除的文件"
+        echo ""
+        return 0
+    fi
+
+    # 显示待删除文件
+    if [ "$DRY_RUN" = true ]; then
+        echo -e "${YELLOW}[DRY-RUN] 将要删除 ${#all_deletions[@]} 个文件:${NC}"
+    else
+        echo -e "${YELLOW}将删除 ${#all_deletions[@]} 个过时模板:${NC}"
+    fi
+
+    for file in "${all_deletions[@]}"; do
+        echo -e "  ${RED}✗${NC} ${file#$PROJECT_ROOT/}"
+    done
+    echo ""
+
+    # Dry-run 模式不执行删除
+    if [ "$DRY_RUN" = true ]; then
+        echo -e "${YELLOW}[DRY-RUN] 未执行实际删除${NC}"
+        echo ""
+        return 0
+    fi
+
+    # 执行删除
+    local deleted_count=0
+    for file in "${all_deletions[@]}"; do
+        if [ -f "$file" ]; then
+            rm "$file"
+            echo -e "  ${GREEN}✓${NC} 已删除: $(basename "$file")"
+            ((deleted_count++))
+        fi
+    done
+
+    [ $deleted_count -gt 0 ] && echo ""
+    DELETED_TEMPLATES=$deleted_count
+}
+
 # 脱敏 settings.json
 sanitize_settings() {
     local input_file="$CLAUDE_DIR/settings.json"
     local output_file="$SETTINGS_TEMPLATE"
 
-    if [ ! -f "$input_file" ]; then
-        return 1
-    fi
+    [ ! -f "$input_file" ] && return 1
 
     if has_jq; then
         if ! jq empty "$input_file" 2>/dev/null; then
-            echo -e "  ${RED}✗${NC} 源文件 JSON 格式错误: $(basename $input_file)"
+            echo -e "  ${RED}✗${NC} 源文件 JSON 格式错误: $(basename "$input_file")"
             return 1
         fi
 
         jq '
             if .env and .env.ANTHROPIC_AUTH_TOKEN then
                 .env.ANTHROPIC_AUTH_TOKEN = "'"$PLACEHOLDER_API_KEY"'"
-            else
-                .
-            end |
-            if .env and .env.ANTHROPIC_BASE_URL then
-                if (.env.ANTHROPIC_BASE_URL | test("api\\.anthropic\\.com") | not) then
-                    .env.ANTHROPIC_BASE_URL = "'"$PLACEHOLDER_ENDPOINT"'"
-                else
-                    .
-                end
-            else
-                .
-            end |
-            if .hooks then
-                del(.hooks)
-            else
-                .
-            end
+            else . end |
+            if .env and .env.ANTHROPIC_BASE_URL and
+               (.env.ANTHROPIC_BASE_URL | test("api\\.anthropic\\.com") | not) then
+                .env.ANTHROPIC_BASE_URL = "'"$PLACEHOLDER_ENDPOINT"'"
+            else . end |
+            if .hooks then del(.hooks) else . end
         ' "$input_file" > "$output_file"
     else
         sed 's/"ANTHROPIC_AUTH_TOKEN": "[^"]*"/"ANTHROPIC_AUTH_TOKEN": "'"$PLACEHOLDER_API_KEY"'"/' \
@@ -120,28 +191,26 @@ sanitize_claude_json() {
     local input="$HOME/.claude.json"
     local output="$CLAUDE_JSON_TEMPLATE"
 
-    if [ ! -f "$input" ]; then
-        return 1
-    fi
+    [ ! -f "$input" ] && return 1
 
-    if has_jq; then
-        if ! jq empty "$input" 2>/dev/null; then
-            echo -e "  ${RED}✗${NC} 源文件 JSON 格式错误: .claude.json"
-            return 1
-        fi
-
-        jq '{
-            autoConnectIde: .autoConnectIde,
-            hasCompletedOnboarding: .hasCompletedOnboarding,
-            hasIdeAutoConnectDialogBeenShown: .hasIdeAutoConnectDialogBeenShown,
-            sonnet45MigrationComplete: .sonnet45MigrationComplete,
-            opus45MigrationComplete: .opus45MigrationComplete,
-            thinkingMigrationComplete: .thinkingMigrationComplete
-        }' "$input" > "$output"
-    else
+    if ! has_jq; then
         echo -e "  ${YELLOW}⚠${NC} jq 未安装，跳过 .claude.json 同步"
         return 1
     fi
+
+    if ! jq empty "$input" 2>/dev/null; then
+        echo -e "  ${RED}✗${NC} 源文件 JSON 格式错误: .claude.json"
+        return 1
+    fi
+
+    jq '{
+        autoConnectIde: .autoConnectIde,
+        hasCompletedOnboarding: .hasCompletedOnboarding,
+        hasIdeAutoConnectDialogBeenShown: .hasIdeAutoConnectDialogBeenShown,
+        sonnet45MigrationComplete: .sonnet45MigrationComplete,
+        opus45MigrationComplete: .opus45MigrationComplete,
+        thinkingMigrationComplete: .thinkingMigrationComplete
+    }' "$input" > "$output"
 
     return 0
 }
@@ -210,14 +279,14 @@ verify_sanitization() {
     )
 
     for template_file in "$CONFIG_TEMPLATE_DIR"/*.template; do
-        if [ -f "$template_file" ]; then
-            for pattern in "${sensitive_patterns[@]}"; do
-                if grep -qE "$pattern" "$template_file" 2>/dev/null; then
-                    echo -e "  ${RED}✗${NC} $(basename $template_file) 可能包含敏感信息"
-                    has_issue=true
-                fi
-            done
-        fi
+        [ -f "$template_file" ] || continue
+
+        for pattern in "${sensitive_patterns[@]}"; do
+            if grep -qE "$pattern" "$template_file" 2>/dev/null; then
+                echo -e "  ${RED}✗${NC} $(basename "$template_file") 可能包含敏感信息"
+                has_issue=true
+            fi
+        done
     done
 
     if [ "$has_issue" = false ]; then
@@ -244,6 +313,9 @@ print_sync_summary() {
     echo ""
     echo "配置文件: $SYNCED_CONFIGS 个已更新"
     echo "自定义扩展: $SYNCED_EXTENSIONS 个文件"
+    if [ $DELETED_TEMPLATES -gt 0 ]; then
+        echo -e "${YELLOW}已删除: $DELETED_TEMPLATES 个过时模板${NC}"
+    fi
     if [ -d "$TEMPLATE_BACKUP_DIR" ]; then
         echo "备份位置: $TEMPLATE_BACKUP_DIR"
     fi
@@ -262,6 +334,7 @@ main() {
     print_header
     check_prerequisites
     backup_templates
+    sync_deletions
     sync_config_files
     sync_extensions
     verify_sanitization

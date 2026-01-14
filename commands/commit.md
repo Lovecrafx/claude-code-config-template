@@ -3,7 +3,7 @@ allowed-tools: Bash(git add:*), Bash(git status:*), Bash(git commit:*)
 description: Create a git commit
 ---
 
-## Conventional Commits 格式
+## Commit 格式
 
 ```
 <type>[optional scope]: <description>
@@ -62,7 +62,7 @@ BREAKING CHANGE: 认证 API 路径从 /api/login 变更为 /api/auth/login
 ## 任务
 
 1. 分析 diff 内容，理解变更的性质和目的
-2. 生成 3 个 commit 消息候选
+2. 生成 3 个 commit 消息候选(表格)
 3. 选择最合适的消息并说明理由
 4. **预览 commit message，等待用户确认**
 5. 用户确认后，使用 git add 暂存变更
@@ -72,3 +72,5 @@ BREAKING CHANGE: 认证 API 路径从 /api/login 变更为 /api/auth/login
 
 - 禁止添加 Claude 共同作者 footer
 - Breaking Change 必须用 `BREAKING CHANGE:` 或 `!:` 标注
+- Be extremely concise in all explanations.
+- 始终遵循常规提交规范: https://www.conventionalcommits.org/zh-hans/v1.0.0/
